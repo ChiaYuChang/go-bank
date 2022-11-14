@@ -30,7 +30,7 @@ func GenSqlcConfig() {
 	)
 	goGen.GoEmitOpts = &gen.GoEmitOpts{
 		JsonTags:        true,
-		PreparedQureies: false,
+		PreparedQureies: true,
 		Interface:       false,
 		ExactTableNames: false,
 	}

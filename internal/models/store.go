@@ -27,6 +27,7 @@ func (s *Store) exectTx(ctx context.Context, fn QueryCallBackFun) error {
 	if err != nil {
 		return err
 	}
+
 	q := New(tx)
 	err = fn(q)
 	if err != nil {
@@ -56,23 +57,27 @@ type TransferTxResult struct {
 	DstEntry   Entry    `json:"dst_entry"`
 }
 
+func (s *Store) DoTransferTx(ctx context.Context, params TransferTxParams) (TransferTxResult, error) {
+	var result TransferTxResult
+	var err error
+	result.Transfer, err = s.Queries.CreateTransferRecord(ctx, CreateTransferRecordParams{
+		SrcID:  params.SrcId,
+		DstID:  params.DstId,
+		Amount: params.Amount,
+		Status: TstatusFailure,
+	})
+	if err != nil {
+		return result, fmt.Errorf("error while creating transfer record: %v", err)
+	}
+	params.Id = result.Transfer.ID
+	return s.TransferTx(ctx, params)
+}
+
 func (s *Store) TransferTx(ctx context.Context, params TransferTxParams) (TransferTxResult, error) {
 	var result TransferTxResult
 
 	err := s.exectTx(ctx, func(q *Queries) error {
 		var err error
-
-		// Create transfer record
-		result.Transfer, err = q.CreateTransferRecord(
-			ctx, CreateTransferRecordParams{
-				SrcID:  params.SrcId,
-				DstID:  params.DstId,
-				Amount: params.Amount,
-				Status: TstatusCreated,
-			})
-		if err != nil {
-			return err
-		}
 
 		// Create Source Account Entry
 		result.ScrEntry, err = q.CreateEntry(
@@ -81,7 +86,7 @@ func (s *Store) TransferTx(ctx context.Context, params TransferTxParams) (Transf
 				Amount:    params.Amount.Neg(),
 			})
 		if err != nil {
-			return err
+			return fmt.Errorf("error while creating entry: %v", err)
 		}
 
 		// Create Destination Account Entry
@@ -91,7 +96,7 @@ func (s *Store) TransferTx(ctx context.Context, params TransferTxParams) (Transf
 				Amount:    params.Amount,
 			})
 		if err != nil {
-			return err
+			return fmt.Errorf("error while creating entry: %v", err)
 		}
 
 		result.SrcAccount, err = q.AccountBalanceWithdraw(
@@ -100,16 +105,16 @@ func (s *Store) TransferTx(ctx context.Context, params TransferTxParams) (Transf
 				Balance: params.Amount,
 			})
 		if err != nil {
-			return err
+			return fmt.Errorf("error while withdrawing from source account: %v", err)
 		}
 
 		result.DstAccount, err = q.AccountBalanceDeposit(
 			ctx, AccountBalanceDepositParams{
-				ID:      params.SrcId,
+				ID:      params.DstId,
 				Balance: params.Amount,
 			})
 		if err != nil {
-			return err
+			return fmt.Errorf("error while depositing to destination account: %v", err)
 		}
 		// err = q.DoTransfer(ctx, NewDoTransferParams(
 		// 	params.SrcId,
@@ -118,6 +123,16 @@ func (s *Store) TransferTx(ctx context.Context, params TransferTxParams) (Transf
 		// if err != nil {
 		// 	return err
 		// }
+
+		// Create transfer record
+		result.Transfer, err = q.UpdateTransferStatus(
+			ctx, UpdateTransferStatusParams{
+				params.Id, TstatusSuccess,
+			})
+		if err != nil {
+			return fmt.Errorf("error while updating status: %v", err)
+		}
+
 		return nil
 	})
 
