@@ -1,5 +1,4 @@
 CREATE TYPE "tstatus" AS ENUM (
-  'created',
   'success',
   'failure'
 );
@@ -9,7 +8,7 @@ CREATE TABLE "transfers" (
   "src_id" bigint NOT NULL,
   "dst_id" bigint NOT NULL,
   "amount" decimal NOT NULL DEFAULT 0,
-  "status" tstatus NOT NULL DEFAULT 'created',
+  "status" tstatus NOT NULL DEFAULT 'failure',
   "created_at" timestamp NOT NULL DEFAULT (now())
 );
 

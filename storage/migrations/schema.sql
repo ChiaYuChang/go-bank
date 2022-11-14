@@ -21,7 +21,6 @@ SET row_security = off;
 --
 
 CREATE TYPE public.tstatus AS ENUM (
-    'created',
     'success',
     'failure'
 );
@@ -187,7 +186,7 @@ CREATE TABLE public.transfers (
     src_id bigint NOT NULL,
     dst_id bigint NOT NULL,
     amount numeric DEFAULT 0 NOT NULL,
-    status public.tstatus DEFAULT 'created'::public.tstatus NOT NULL,
+    status public.tstatus DEFAULT 'failure'::public.tstatus NOT NULL,
     created_at timestamp without time zone DEFAULT now() NOT NULL
 );
 

@@ -20,5 +20,5 @@ RETURNING *;
 -- name: UpdateTransferStatus :one
 UPDATE transfers SET
     status = $2
-WHERE id = $1 AND deleted_at IS NULL
+WHERE id = $1
 RETURNING *;
