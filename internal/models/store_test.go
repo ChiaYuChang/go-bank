@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
@@ -58,13 +60,6 @@ type testTransferTxResuts struct {
 	index  int
 	err    error
 	result *models.TransferTxResult
-}
-
-func rdmError() error {
-	if rand.Intn(100) < 30 { // 10% of failure
-		return ErrRdm
-	}
-	return nil
 }
 
 func mustCreateNewTestTransferRecord(t *testing.T, n int, src, dst, amount int64, status models.Tstatus) []models.Transfer {
@@ -175,15 +170,21 @@ func TestTransferTx(t *testing.T) {
 	dstAcc := accs[1]
 
 	t.Logf("Id %d, Name %s", cr.ID, cr.Name)
-	t.Logf("Id %d, Src Owner %s", srcAcc.ID, srcAcc.Owner)
-	t.Logf("Id %d, Dst Owner %s", dstAcc.ID, dstAcc.Owner)
+	t.Logf("Id %d Src Owner %s Balance %d", srcAcc.ID, srcAcc.Owner, srcAcc.Balance.BigInt().Int64())
+	t.Logf("Id %d Dst Owner %s Balance %d", dstAcc.ID, dstAcc.Owner, dstAcc.Balance.BigInt().Int64())
 
-	amount := decimal.NewFromInt(100)
+	amountInt := 3
+	amount := decimal.NewFromInt(int64(amountInt))
 
 	n := runtime.NumCPU() * 2
+	t.Logf("cpu num  %d", n)
+
 	results := make(chan testTransferTxResuts)
 	for i := 0; i < n; i++ {
 		go func(index int) {
+			s := rand.Intn(10)
+			time.Sleep(time.Duration(s) * time.Second)
+
 			result, err := store.DoTransferTx(
 				context.Background(), models.TransferTxParams{
 					SrcId:  srcAcc.ID,
@@ -197,68 +198,224 @@ func TestTransferTx(t *testing.T) {
 		}(i)
 	}
 
-	errors := make([]*testerrors, 0)
+	existed := make(map[decimal.Decimal]bool)
+	for i := 0; i < n; i++ {
+		r := <-results
+		// check transfer
+		require.NoError(t, r.err)
+		require.NotEmpty(t, r.result)
+		require.Equal(t, srcAcc.ID, r.result.Transfer.SrcID)
+		require.Equal(t, dstAcc.ID, r.result.Transfer.DstID)
+		if !amount.Equal(r.result.Transfer.Amount) {
+			t.Fatalf("transfer.amount not match: want: %d, get: %d", amount, r.result.Transfer.Amount)
+		}
+		require.NotEqual(t, r.result.Transfer.ID, 0)
+		require.NotZero(t, r.result.Transfer.CreatedAt)
+		require.Equal(t, r.result.Transfer.Status, models.TstatusSuccess)
+
+		// check source entry
+		require.NotEmpty(t, r.result.ScrEntry)
+		require.Equal(t, r.result.ScrEntry.AccountID, srcAcc.ID)
+		if !r.result.ScrEntry.Amount.Equal(amount.Neg()) {
+			t.Fatalf("src_entry.balance not match: want: %d, get: %d", amount, r.result.ScrEntry.Amount)
+		}
+		require.NotZero(t, r.result.ScrEntry.ID)
+		require.NotZero(t, r.result.ScrEntry.CreatedAt)
+
+		// check destination entry
+		require.NotEmpty(t, r.result.DstEntry)
+		require.Equal(t, r.result.DstEntry.AccountID, dstAcc.ID)
+		if !r.result.DstEntry.Amount.Equal(amount) {
+			t.Fatalf("dst_entry.balance not match: want: %d, get: %d", amount, r.result.DstEntry.Amount)
+		}
+		require.NotZero(t, r.result.DstEntry.ID)
+		require.NotZero(t, r.result.DstEntry.CreatedAt)
+
+		// check source account
+		require.NotEmpty(t, r.result.SrcAccount)
+		require.Equal(t, r.result.SrcAccount.ID, srcAcc.ID)
+		require.Equal(t, r.result.SrcAccount.Owner, srcAcc.Owner)
+		require.Equal(t, r.result.SrcAccount.Currency, srcAcc.Currency)
+		require.Equal(t, r.result.SrcAccount.CreatedAt, srcAcc.CreatedAt)
+
+		// check destination account
+		require.NotEmpty(t, r.result.DstAccount)
+		require.Equal(t, r.result.DstAccount.ID, dstAcc.ID)
+		require.Equal(t, r.result.DstAccount.Owner, dstAcc.Owner)
+		require.Equal(t, r.result.DstAccount.Currency, dstAcc.Currency)
+		require.Equal(t, r.result.DstAccount.CreatedAt, dstAcc.CreatedAt)
+
+		diff1 := srcAcc.Balance.Sub(r.result.SrcAccount.Balance)
+		diff2 := dstAcc.Balance.Sub(r.result.DstAccount.Balance)
+		if !diff1.Equal(diff2.Neg()) {
+			t.Fatalf(
+				"difference between accounts not match: src: %d, dst: %d",
+				diff1.BigInt().Int64(),
+				diff2.BigInt().Int64(),
+			)
+		}
+
+		k := diff1.Div(amount)
+		if k.LessThan(decimal.NewFromInt(1)) {
+			kf, _ := k.Float64()
+			t.Fatalf("k should be within [1, n], get: %f", kf)
+		}
+		if k.GreaterThan(decimal.NewFromInt(int64(n))) {
+			kf, _ := k.Float64()
+			t.Fatalf("k should be within [1, n], get: %f", kf)
+		}
+		require.NotContains(t, existed, k)
+		existed[k] = true
+	}
+
+	uSrcAcc, err := testQureies.GetAccount(context.Background(), srcAcc.ID)
+	t.Logf("updated src_acc.balance: %d", uSrcAcc.Balance.BigInt().Int64())
+	require.NoError(t, err)
+
+	uDstAcc, err := testQureies.GetAccount(context.Background(), dstAcc.ID)
+	t.Logf("updated dst_acc.balance: %d", uDstAcc.Balance.BigInt().Int64())
+	require.NoError(t, err)
+
+	t.Logf(
+		"Src: Balance %d -> %d (diff want: %3d get %3d)",
+		srcAcc.Balance.BigInt().Int64(),
+		uSrcAcc.Balance.BigInt().Int64(),
+		-1*n*amountInt,
+		uSrcAcc.Balance.Sub(srcAcc.Balance).BigInt().Int64(),
+	)
+
+	t.Logf(
+		"Dst: Balance %d -> %d (diff want: %3d get %3d)",
+		dstAcc.Balance.BigInt().Int64(),
+		uDstAcc.Balance.BigInt().Int64(),
+		n*amountInt,
+		uDstAcc.Balance.Sub(dstAcc.Balance).BigInt().Int64(),
+	)
+
+	if !srcAcc.Balance.Sub(amount.Mul(decimal.NewFromInt(int64(n)))).Equal(uSrcAcc.Balance) {
+		log.Fatalf("src_acc balance error")
+	}
+
+	if !dstAcc.Balance.Add(amount.Mul(decimal.NewFromInt(int64(n)))).Equal(uDstAcc.Balance) {
+		log.Fatalf("dst_acc balance error")
+	}
+}
+
+func TestTransferTxDeadlock(t *testing.T) {
+	store := models.NewStore(testDB)
+
+	cr := mustCreateAnTestCurrency(t, 1)[0]
+	accs := mustCreateAnTestAccount(t, 2, cr.ID)
+	acc1 := accs[0]
+	acc2 := accs[1]
+
+	t.Logf("Id %d, Name %s", cr.ID, cr.Name)
+	t.Logf("Id %d Src Owner %s Balance %d", acc1.ID, acc1.Owner, acc1.Balance.BigInt().Int64())
+	t.Logf("Id %d Dst Owner %s Balance %d", acc2.ID, acc2.Owner, acc2.Balance.BigInt().Int64())
+
+	amountInt := 3
+	amount := decimal.NewFromInt(int64(amountInt))
+
+	n := runtime.NumCPU() * 2
+	t.Logf("cpu num  %d", n)
+
+	results := make(chan testTransferTxResuts)
+	for i := 0; i < n; i++ {
+		var src, dst models.Account
+		if i%2 == 0 {
+			src = acc1
+			dst = acc2
+		} else {
+			src = acc2
+			dst = acc1
+		}
+
+		go func(index int, src, dst models.Account) {
+			_, err := store.DoTransferTx(
+				context.Background(), models.TransferTxParams{
+					SrcId:  src.ID,
+					DstId:  dst.ID,
+					Amount: amount,
+				})
+			results <- testTransferTxResuts{
+				index:  index,
+				err:    err,
+				result: nil}
+		}(i, src, dst)
+	}
+
 	for i := 0; i < n; i++ {
 		r := <-results
 		if r.err != nil {
-			err := NewTestErrors(r.err.Error())
-			errors = append(errors, err)
-			continue
-		}
-
-		if r.result == nil {
-			err := NewTestErrors("the result is empty")
-			errors = append(errors, err)
-			continue
-		}
-
-		dtl := make([]string, 0)
-		if srcAcc.ID != r.result.SrcAccount.ID {
-			dtl = append(
-				dtl, fmt.Sprintf(
-					"sourse account not match: want: %d, get: %d",
-					srcAcc.ID, r.result.SrcAccount.ID),
-			)
-		}
-
-		if dstAcc.ID != r.result.DstAccount.ID {
-			dtl = append(
-				dtl, fmt.Sprintf(
-					"destination account not match: want: %d, get: %d",
-					dstAcc.ID, r.result.DstAccount.ID),
-			)
-		}
-
-		if !amount.Equal(r.result.Transfer.Amount) {
-			dtl = append(
-				dtl, fmt.Sprintf(
-					"amount not match: want: %d, get: %d",
-					amount, r.result.Transfer.Amount),
-			)
-		}
-
-		if r.result.Transfer.ID == 0 {
-			dtl = append(dtl, "transfer is should be greater than zero")
-		}
-
-		if r.result.Transfer.CreatedAt.IsZero() {
-			dtl = append(dtl, "created_at should not be zero")
-		}
-
-		if r.result.Transfer.Status != models.TstatusSuccess {
-			dtl = append(dtl, "status not match")
-		}
-
-		if len(dtl) > 0 {
-			err := NewTestErrors("field value not match").WithDetails(dtl...)
-			errors = append(errors, err)
+			if r.err == models.ErrSelfLoop {
+				continue
+			}
+			t.Fatalf("error: %v", r.err)
 		}
 	}
 
-	if len(errors) > 0 {
-		for _, e := range errors {
-			t.Log(e.String())
-		}
-		t.Fatal()
+	uAcc1, err := testQureies.GetAccount(context.Background(), acc1.ID)
+	t.Logf(
+		"updated src_acc.balance: %d (expected: %d)",
+		uAcc1.Balance.BigInt().Int64(),
+		acc1.Balance.BigInt().Int64(),
+	)
+	require.NoError(t, err)
+
+	uAcc2, err := testQureies.GetAccount(context.Background(), acc2.ID)
+	t.Logf("updated dst_acc.balance: %d", uAcc2.Balance.BigInt().Int64())
+	require.NoError(t, err)
+
+	if !acc1.Balance.Equal(uAcc1.Balance) {
+		log.Fatalf("src_acc balance error")
 	}
+
+	if !acc2.Balance.Equal(uAcc2.Balance) {
+		log.Fatalf("dst_acc balance error")
+	}
+}
+
+func TestTransferTxSelfLoop(t *testing.T) {
+	store := models.NewStore(testDB)
+
+	cr := mustCreateAnTestCurrency(t, 1)[0]
+	acc := mustCreateAnTestAccount(t, 1, cr.ID)[0]
+
+	amount := decimal.NewFromInt(int64(3))
+
+	n := 5
+	t.Logf("cpu num  %d", n)
+	results := make(chan testTransferTxResuts)
+	for i := 0; i < n; i++ {
+		go func(index int, src, dst models.Account) {
+			_, err := store.DoTransferTx(
+				context.Background(), models.TransferTxParams{
+					SrcId:  src.ID,
+					DstId:  dst.ID,
+					Amount: amount,
+				})
+			results <- testTransferTxResuts{
+				index:  index,
+				err:    err,
+				result: nil}
+		}(i, acc, acc)
+	}
+
+	for i := 0; i < n; i++ {
+		r := <-results
+		if r.err != nil {
+			if r.err == models.ErrSelfLoop {
+				continue
+			}
+			t.Fatalf("error: %v", r.err)
+		}
+	}
+
+	uAcc, err := testQureies.GetAccount(context.Background(), acc.ID)
+	require.NoError(t, err)
+
+	if !acc.Balance.Equal(uAcc.Balance) {
+		log.Fatalf("account balance error")
+	}
+
 }

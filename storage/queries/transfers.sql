@@ -1,8 +1,8 @@
 -- name: DoTransfer :exec
   WITH _data (id, amount) AS (
 VALUES
-    ($1::bigserial, -$2::decimal),
-    ($3::bigserial, $4::decimal)
+    (sqlc.arg(src_id)::bigint, -sqlc.arg(amount)::decimal),
+    (sqlc.arg(dst_id)::bigint,  sqlc.arg(amount)::decimal)
 )
 UPDATE accounts AS a
    SET balance = balance + _data.amount

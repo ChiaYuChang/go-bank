@@ -3,6 +3,7 @@ package secretRepo
 import (
 	crand "crypto/rand"
 	"errors"
+	"fmt"
 	mrand "math/rand"
 	"time"
 
@@ -22,6 +23,11 @@ var alnums = []byte("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVW
 var mRSeed int64 = 20221111
 var mRSource mrand.Source
 var mRand *mrand.Rand
+
+type KeyRandomGenerateMethod string
+
+var GMMath KeyRandomGenerateMethod = "math/rand"
+var GMCrypto KeyRandomGenerateMethod = "crypto/rand"
 
 type Secret struct {
 	Key       uuid.UUID `json:"key"`
@@ -45,7 +51,7 @@ type JWTSecretRepo struct {
 	CurrKey       uuid.UUID
 	CurrSecret    []byte
 	DB            SecretDB
-	randGenMethod string
+	randGenMethod KeyRandomGenerateMethod
 }
 
 func SetRandomSeed(seed int64) {
@@ -57,16 +63,74 @@ func InitRandomGenerator() {
 	mRand = mrand.New(mRSource)
 }
 
-func NewJWTSecretRepo(srctLen int, lifeSpan time.Duration, validAfter time.Duration, db SecretDB) (*JWTSecretRepo, error) {
-	srctRepo := &JWTSecretRepo{
-		SecretLen:     srctLen,
-		LifeSpan:      lifeSpan,
-		ValidAfter:    validAfter,
-		DB:            db,
-		randGenMethod: "math",
+func NewJWTSecretRepo(db SecretDB, opts ...option) (*JWTSecretRepo, error) {
+	srctRepo := &JWTSecretRepo{DB: db}
+	for _, opt := range opts {
+		err := opt(srctRepo)
+		if err != nil {
+			return srctRepo, err
+		}
 	}
+
+	if srctRepo.SecretLen <= 0 {
+		srctRepo.SecretLen = 256
+	}
+
+	if srctRepo.LifeSpan == 0 {
+		srctRepo.LifeSpan = 1 * time.Hour
+	}
+
+	if srctRepo.ValidAfter < 0 {
+		srctRepo.ValidAfter = 0
+	}
+
 	_, _, err := srctRepo.UpdateCurrSecret()
 	return srctRepo, err
+}
+
+type option func(sr *JWTSecretRepo) error
+
+func WithSecretLength(sln int) option {
+	return func(sr *JWTSecretRepo) error {
+		if sln <= 0 {
+			return fmt.Errorf("secret length should be greather than zero (get %d)", sln)
+		}
+		sr.SecretLen = sln
+		return nil
+	}
+}
+
+func WithSecretKeyLifeSpan(lifespan string) option {
+	return func(sr *JWTSecretRepo) error {
+		d, err := time.ParseDuration(lifespan)
+		if err != nil {
+			return err
+		}
+
+		if d <= 1*time.Second {
+			return fmt.Errorf("life span of a secret key should be greather than 1 sec (get %v)", d)
+		}
+		sr.LifeSpan = d
+		return nil
+	}
+}
+
+func WithSecretKeyValidAfter(validAfter string) option {
+	return func(sr *JWTSecretRepo) error {
+		d, err := time.ParseDuration(validAfter)
+		if err != nil {
+			return err
+		}
+		sr.ValidAfter = d
+		return nil
+	}
+}
+
+func WithSecretRandomGenerateMethod(method KeyRandomGenerateMethod) option {
+	return func(sr *JWTSecretRepo) error {
+		sr.randGenMethod = method
+		return nil
+	}
 }
 
 func (sr *JWTSecretRepo) GetSecret(key uuid.UUID) ([]byte, bool) {
@@ -104,11 +168,11 @@ func genRdmIntWMRand(sLen int) ([]uint8, error) {
 func (sr *JWTSecretRepo) UpdateCurrSecret() (uuid.UUID, []byte, error) {
 	var err error
 	var randindex []uint8
-	if sr.randGenMethod == "math" {
-		randindex, err = genRdmIntWMRand(sr.SecretLen)
-	}
 
-	if sr.randGenMethod == "crypto" {
+	switch sr.randGenMethod {
+	case GMMath:
+		randindex, err = genRdmIntWMRand(sr.SecretLen)
+	case GMCrypto:
 		randindex, err = genRdmIntWCRand(sr.SecretLen)
 	}
 

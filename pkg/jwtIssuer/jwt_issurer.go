@@ -1,13 +1,37 @@
 package jwtIssuer
 
 import (
+	"context"
 	"crypto"
-	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	"gitlab.com/gjerry134679/bank/pkg/jwtIssuer/secretRepo"
+	"gitlab.com/gjerry134679/bank/pkg/jwtIssuer/secretRepo/inMemory"
 )
+
+type CtxKey interface {
+	Key() ctxkey
+	String() string
+}
+
+type ctxkey struct{ key string }
+
+type Auth struct {
+	Account  string
+	Password string
+}
+
+func (a Auth) Key() ctxkey {
+	return ctxkey{key: a.String()}
+}
+
+func (a Auth) String() string {
+	return "CtxKeyAuth"
+}
 
 type Claims struct {
 	KeyId   uuid.UUID
@@ -16,58 +40,149 @@ type Claims struct {
 }
 
 type JWTIssuer struct {
-	Method        jwt.SigningMethod
-	HashSumMethod crypto.Hash
-	ServiceName   string
-	CheckClaims   jwt.RegisteredClaims
-	Repo          secretRepo.JWTSecretRepo
+	method       jwt.SigningMethod
+	hashMethod   crypto.Hash
+	ServiceName  string
+	validAfter   *time.Duration
+	expiredAfter *time.Duration
+	renewfreq    time.Duration
+	done         chan bool
+	ticker       *time.Ticker
+	repo         *secretRepo.JWTSecretRepo
+	authChecker  func(account, password string) bool
+	checker
 }
 
-func NewJWTIssuer(serviceName, issuer string, hashSumMethod crypto.Hash, repo secretRepo.JWTSecretRepo) *JWTIssuer {
-	return &JWTIssuer{
-		Method:        jwt.SigningMethodHS256,
-		HashSumMethod: hashSumMethod,
-		ServiceName:   serviceName,
-		Repo:          repo,
-		CheckClaims: jwt.RegisteredClaims{
-			Issuer: issuer,
-		},
+func NewJWTIssuer(opts ...option) (*JWTIssuer, error) {
+	ji := &JWTIssuer{done: make(chan bool, 1)}
+	for _, opt := range opts {
+		err := opt(ji)
+		if err != nil {
+			return ji, err
+		}
 	}
-}
 
-func (j *JWTIssuer) DeepCopyStdClaims() (jwt.RegisteredClaims, error) {
-	var newRClaims jwt.RegisteredClaims
-	jsn, err := json.Marshal(j.CheckClaims)
-	if err != nil {
-		return newRClaims, err
+	if ji.method == nil {
+		ji.method = jwt.SigningMethodHS256
 	}
-	err = json.Unmarshal(jsn, &newRClaims)
-	return newRClaims, err
+
+	if ji.ServiceName == "" {
+		ji.ServiceName = "my-jwt"
+	}
+
+	if ji.ticker == nil {
+		ji.renewfreq = 1 * time.Hour
+		ji.ticker = time.NewTicker(ji.renewfreq)
+	}
+
+	if ji.repo == nil {
+		ji.repo, _ = secretRepo.NewJWTSecretRepo(inMemory.NewInMemoryDB())
+	}
+
+	if ji.authChecker == nil {
+		ji.authChecker = func(account, password string) bool { return true }
+	}
+
+	if len(ji.checker.issuers) == 0 {
+		ji.Add(fiss, "issuer")
+	}
+
+	if len(ji.subjects) == 0 {
+		ji.Add(fsub, "gerneral")
+	}
+
+	if ji.expiredAfter == nil {
+		t := 3 * time.Hour
+		ji.expiredAfter = &t
+	}
+
+	if ji.validAfter == nil {
+		t := 0 * time.Second
+		ji.validAfter = &t
+	}
+
+	go func() {
+		for {
+			select {
+			case <-ji.done:
+				return
+			case <-ji.ticker.C:
+				ji.RenewCurrKey()
+			}
+		}
+	}()
+
+	return ji, nil
 }
 
-func (j *JWTIssuer) GetJWTSecret(Key uuid.UUID) ([]byte, bool) {
-	return j.Repo.GetSecret(Key)
+func (ji *JWTIssuer) String() string {
+	sb := strings.Builder{}
+	sb.WriteString(fmt.Sprintf("Service name     : %v\n", ji.ServiceName))
+	sb.WriteString(fmt.Sprintf("JWT Algorithm    : %v\n", ji.method.Alg()))
+	sb.WriteString(fmt.Sprintf("Info Hash Method : %v\n", ji.hashMethod.String()))
+	sb.WriteString(fmt.Sprintf("Renew  Frequency : %v\n", ji.renewfreq))
+	sb.WriteString("JWT:\n")
+	sb.WriteString("  - Issuers (iss):\n")
+	for k := range ji.issuers {
+		sb.WriteString(fmt.Sprintf("    - %s:\n", k))
+	}
+	sb.WriteString("  - Audiences (aud):\n")
+	for k := range ji.audiences {
+		sb.WriteString(fmt.Sprintf("    - %s:\n", k))
+	}
+	sb.WriteString("  - Subjects (sub):\n")
+	for k := range ji.subjects {
+		sb.WriteString(fmt.Sprintf("    - %s:\n", k))
+	}
+	sb.WriteString("  - JWT Id (jti):\n")
+	for k := range ji.jwtids {
+		sb.WriteString(fmt.Sprintf("    - %s:\n", k))
+	}
+	sb.WriteString(fmt.Sprintf("  - Valid After   : %v\n", ji.validAfter.String()))
+	sb.WriteString(fmt.Sprintf("  - Expired After : %v\n", ji.validAfter.String()))
+	return sb.String()
 }
 
-func (j *JWTIssuer) RenewCurrKey() error {
-	_, _, err := j.Repo.UpdateCurrSecret()
+func (ji *JWTIssuer) GetJWTSecret(Key uuid.UUID) ([]byte, bool) {
+	return ji.repo.GetSecret(Key)
+}
+
+func (ji *JWTIssuer) RenewCurrKey() error {
+	_, _, err := ji.repo.UpdateCurrSecret()
 	return err
 }
 
-// func (j *JWTIssuer) GenerateSignature(ctx context.Context, appAuth *model.AppAuth) (uuid.UUID, string, error) {
-// 	if appAuth.HashedKey == "" || appAuth.HashedSecret == "" {
-// 		return uuid.Nil, "", errors.New("hashedkey/hashedsecret field should not be empty")
-// 	}
-// 	currTime := time.Now()
-// 	expiredTime := currTime.Add(j.ExpireAfter)
+func (ji *JWTIssuer) ResetTicker(d time.Duration) {
+	ji.renewfreq = d
+	ji.ticker.Reset(d)
+}
 
-// 	hasher := j.HashSumMethod.New()
-// 	hasher.Write([]byte(appAuth.HashedKey))
-// 	hasher.Write(salt)
-// 	hasher.Write([]byte(appAuth.HashedSecret))
+func (ji *JWTIssuer) GracefulStop() {
+	ji.ticker.Stop()
+	ji.done <- true
+}
+
+func (ji *JWTIssuer) GenerateSignature(ctx context.Context) (uuid.UUID, string, error) {
+	var err error
+	var secretKey uuid.UUID = uuid.Nil
+	var signature string = ""
+	var auth Auth
+
+	auth = ctx.Value(auth.Key()).(Auth)
+	if !ji.authChecker(auth.Account, auth.Password) {
+		return secretKey, signature, err
+	}
+
+	// rclms := jwt.RegisteredClaims{
+	// 	Issuer: ji,
+	// }
+	// currTime := time.Now()
+	// expiredTime := currTime.Add(ji.repo.ValidAfter).Add(ji.repo.ValidAfter)
+	return secretKey, signature, err
+}
+
 // 	claims := Claims{
-// 		KeyId:   j.CurrJWTSecret.KeyId,
-// 		HashSum: hex.EncodeToString(hasher.Sum(nil)),
+// 		KeyId: ji.repo.CurrKey,
 // 	}
 // 	rclms, err := j.DeepCopyStdClaims()
 // 	if err != nil {

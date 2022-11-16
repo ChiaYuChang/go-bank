@@ -79,7 +79,7 @@ func mustCreateAnTestAccount(t *testing.T, n int, cid int32) []models.Account {
 			context.Background(),
 			models.CreateAccountParams{
 				Owner:    fmt.Sprintf("Owner%2d", i),
-				Balance:  decimal.NewFromInt(int64(i * 243)),
+				Balance:  decimal.NewFromInt(int64((i + 1) * 243)),
 				Currency: cid,
 			})
 		if err != nil {

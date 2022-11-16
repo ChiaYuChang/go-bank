@@ -79,8 +79,8 @@ func (d *AccountDao) UpdateBalance(ctx context.Context, id int64, balance decima
 // withdraw from balance
 func (d *AccountDao) BalanceWithdraw(ctx context.Context, id int64, amount decimal.Decimal) (models.Account, error) {
 	param := models.AccountBalanceWithdrawParams{
-		ID:      id,
-		Balance: amount,
+		ID:     id,
+		Amount: amount,
 	}
 	return d.engine.AccountBalanceWithdraw(ctx, param)
 }
@@ -88,8 +88,8 @@ func (d *AccountDao) BalanceWithdraw(ctx context.Context, id int64, amount decim
 // deposit to balance
 func (d *AccountDao) BalanceDeposit(ctx context.Context, id int64, amount decimal.Decimal) (models.Account, error) {
 	param := models.AccountBalanceDepositParams{
-		ID:      id,
-		Balance: amount,
+		ID:     id,
+		Amount: amount,
 	}
 	return d.engine.AccountBalanceDeposit(ctx, param)
 }

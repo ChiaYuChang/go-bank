@@ -59,6 +59,14 @@ build:
 run:
 	go run ./main.go
 
+test:
+	@echo "========================================================================================================"
+	@echo "testing package in internal/"
+	@go test -v -cover ./internal/...
+	@echo "========================================================================================================"
+	@echo "testing package in pkg/"
+	@go test -v -cover ./pkg/...
+
 about: ## Display info related to the build
 	@echo "- Protoc version  : $(shell protoc --version)"
 	@echo "- Go version      : $(shell go version)"

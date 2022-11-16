@@ -3,10 +3,13 @@ package models
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/shopspring/decimal"
 )
+
+var ErrSelfLoop error = errors.New("source id and destination id should be different")
 
 type Store struct {
 	*Queries
@@ -60,15 +63,27 @@ type TransferTxResult struct {
 func (s *Store) DoTransferTx(ctx context.Context, params TransferTxParams) (TransferTxResult, error) {
 	var result TransferTxResult
 	var err error
+	var selfloop bool = false
+	var status Tstatus = TstatusFailure
+	if params.SrcId == params.DstId {
+		status = TstatusSuccess
+		selfloop = true
+	}
+
 	result.Transfer, err = s.Queries.CreateTransferRecord(ctx, CreateTransferRecordParams{
 		SrcID:  params.SrcId,
 		DstID:  params.DstId,
 		Amount: params.Amount,
-		Status: TstatusFailure,
+		Status: status,
 	})
 	if err != nil {
 		return result, fmt.Errorf("error while creating transfer record: %v", err)
 	}
+
+	if selfloop {
+		return result, ErrSelfLoop
+	}
+
 	params.Id = result.Transfer.ID
 	return s.TransferTx(ctx, params)
 }
@@ -99,27 +114,61 @@ func (s *Store) TransferTx(ctx context.Context, params TransferTxParams) (Transf
 			return fmt.Errorf("error while creating entry: %v", err)
 		}
 
-		result.SrcAccount, err = q.AccountBalanceWithdraw(
-			ctx, AccountBalanceWithdrawParams{
-				ID:      params.SrcId,
-				Balance: params.Amount,
-			})
-		if err != nil {
-			return fmt.Errorf("error while withdrawing from source account: %v", err)
+		// Prevent deadlock
+		if params.SrcId > params.DstId {
+			result.SrcAccount, err = q.AccountBalanceWithdraw(
+				ctx, AccountBalanceWithdrawParams{
+					ID:     params.SrcId,
+					Amount: params.Amount,
+				})
+			if err != nil {
+				return fmt.Errorf("error while withdrawing from source account: %v", err)
+			}
+
+			result.DstAccount, err = q.AccountBalanceDeposit(
+				ctx, AccountBalanceDepositParams{
+					ID:     params.DstId,
+					Amount: params.Amount,
+				})
+			if err != nil {
+				return fmt.Errorf("error while depositing to destination account: %v", err)
+			}
+		} else {
+			result.DstAccount, err = q.AccountBalanceDeposit(
+				ctx, AccountBalanceDepositParams{
+					ID:     params.DstId,
+					Amount: params.Amount,
+				})
+			if err != nil {
+				return fmt.Errorf("error while depositing to destination account: %v", err)
+			}
+
+			result.SrcAccount, err = q.AccountBalanceWithdraw(
+				ctx, AccountBalanceWithdrawParams{
+					ID:     params.SrcId,
+					Amount: params.Amount,
+				})
+			if err != nil {
+				return fmt.Errorf("error while withdrawing from source account: %v", err)
+			}
 		}
 
-		result.DstAccount, err = q.AccountBalanceDeposit(
-			ctx, AccountBalanceDepositParams{
-				ID:      params.DstId,
-				Balance: params.Amount,
-			})
-		if err != nil {
-			return fmt.Errorf("error while depositing to destination account: %v", err)
-		}
-		// err = q.DoTransfer(ctx, NewDoTransferParams(
-		// 	params.SrcId,
-		// 	params.DstId,
-		// 	params.Amount))
+		// err = q.DoTransfer(ctx, DoTransferParams{
+		// 	SrcID:  params.SrcId,
+		// 	DstID:  params.DstId,
+		// 	Amount: params.Amount,
+		// })
+
+		// if err != nil {
+		// 	return err
+		// }
+
+		// result.SrcAccount, err = q.GetAccount(ctx, params.SrcId)
+		// if err != nil {
+		// 	return err
+		// }
+
+		// result.DstAccount, err = q.GetAccount(ctx, params.DstId)
 		// if err != nil {
 		// 	return err
 		// }

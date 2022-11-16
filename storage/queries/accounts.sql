@@ -35,15 +35,16 @@ RETURNING *;
 
 -- name: AccountBalanceDeposit :one
 UPDATE accounts SET
-    balance = balance + $1,
-    updated_at = $2
-WHERE id = $3 AND deleted_at IS NULL
+    balance = balance + sqlc.arg(amount),
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL
 RETURNING *; 
 
 -- name: AccountBalanceWithdraw :one
 UPDATE accounts SET
-    balance = balance - $1
-WHERE id = $2 AND deleted_at IS NULL
+    balance = balance - sqlc.arg(amount),
+    updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL
 RETURNING *; 
 
 -- name: ListAccounts :many

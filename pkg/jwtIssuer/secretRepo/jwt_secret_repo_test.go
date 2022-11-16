@@ -21,9 +21,12 @@ func init() {
 	jwtSrctDB = inMemory.NewInMemoryDB()
 	secretRepo.SetRandomSeed(1111)
 	secretRepo.InitRandomGenerator()
-
 	jwtSrctRepo, err = secretRepo.NewJWTSecretRepo(
-		16, 2*time.Second, 2*time.Second, jwtSrctDB,
+		jwtSrctDB,
+		secretRepo.WithSecretLength(16),
+		secretRepo.WithSecretKeyValidAfter("2s"),
+		secretRepo.WithSecretKeyLifeSpan("2s"),
+		secretRepo.WithSecretRandomGenerateMethod(secretRepo.GMMath),
 	)
 	if err != nil {
 		log.Fatalf("error while creating jwt secret repo")
@@ -35,8 +38,10 @@ func TestGetSecret(t *testing.T) {
 	secretRepo.InitRandomGenerator()
 
 	t.Log("query by random uuid...")
-	_, ok := jwtSrctRepo.GetSecret(uuid.New())
+	uid := uuid.New()
+	s, ok := jwtSrctRepo.GetSecret(uid)
 	if ok {
+		t.Logf("get secret %s with id %s", string(s), uid)
 		t.Fatal("should not retrieve secret invalid secret key")
 	}
 
