@@ -70,11 +70,7 @@ func (e *Error) String() string {
 }
 
 func (e *Error) Clone() *Error {
-	newE := &Error{
-		Code:    e.Code,
-		Message: e.Message,
-		Details: make([]string, len(e.Details)),
-	}
+	newE := NewError(e.Code, e.HttpStatusCode, e.Message)
 	copy(newE.Details, e.Details)
 	return newE
 }

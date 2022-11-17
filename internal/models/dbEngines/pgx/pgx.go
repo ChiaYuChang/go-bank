@@ -1,24 +1,23 @@
 package pgx
 
 import (
-	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	_ "github.com/jackc/pgx/v4/stdlib"
 )
 
-const dbDriver = "postgres"
+const dbDriver = "pgx"
 
 type DBSource struct {
-	Account  string
-	Password string
-	Address  string
-	Port     int
-	DBName   string
-	Options  map[string]string
-	Ctx      context.Context
+	Account  string            `json:"account"`
+	Password string            `json:"password"`
+	Address  string            `json:"address"`
+	Port     int               `json:"port"`
+	DBName   string            `json:"db_name"`
+	Options  map[string]string `json:"options"`
 }
 
 func (dbs DBSource) ConnStr() string {
@@ -40,31 +39,43 @@ func (dbs DBSource) ConnStr() string {
 	return s
 }
 
-func (db DBSource) String() string {
+func (dbs DBSource) String() string {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("Driver: %s:\n", dbDriver))
-	sb.WriteString(fmt.Sprintf(" - Account  : %s\n", db.Account))
-	sb.WriteString(fmt.Sprintf(" - Password : %s\n", db.Password))
-	sb.WriteString(fmt.Sprintf(" - DB Addr  : %s\n", db.Address))
-	sb.WriteString(fmt.Sprintf(" - DB Port  : %d\n", db.Port))
-	sb.WriteString(fmt.Sprintf(" - DB Name  : %s\n", db.DBName))
-	if len(db.Options) > 0 {
-		sb.WriteString(" - DB Opts  :")
-		for key, val := range db.Options {
+	sb.WriteString(fmt.Sprintf(" - Account  : %s\n", dbs.Account))
+	sb.WriteString(fmt.Sprintf(" - Password : %s\n", dbs.Password))
+	sb.WriteString(fmt.Sprintf(" - DB Addr  : %s\n", dbs.Address))
+	sb.WriteString(fmt.Sprintf(" - DB Port  : %d\n", dbs.Port))
+	sb.WriteString(fmt.Sprintf(" - DB Name  : %s\n", dbs.DBName))
+	if len(dbs.Options) > 0 {
+		sb.WriteString(" - DB Opts  :\n")
+		for key, val := range dbs.Options {
 			sb.WriteString(fmt.Sprintf("   - %s = %s", key, val))
 		}
 	}
 	return sb.String()
 }
 
-func (db DBSource) Driver() string {
+func (dbs DBSource) Marshal() ([]byte, error) {
+	return json.Marshal(dbs)
+}
+
+func (dbs DBSource) Driver() string {
 	return dbDriver
 }
 
-func NewDB(dbSource DBSource) (*sql.DB, error) {
-	db, err := sql.Open(dbDriver, dbSource.ConnStr())
+func (dbs DBSource) Open() (*sql.DB, error) {
+	db, err := sql.Open(dbs.Driver(), dbs.ConnStr())
+	if err != nil {
+		return nil, err
+	}
+	err = db.Ping()
 	if err != nil {
 		return nil, err
 	}
 	return db, err
+}
+
+func NewDB(dbSource DBSource) (*sql.DB, error) {
+	return dbSource.Open()
 }

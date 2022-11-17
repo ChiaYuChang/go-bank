@@ -7,11 +7,7 @@ import (
 )
 
 func init() {
-	ErrorRepo = make(errorRepo)
-	ErrorRepo.WithSuccess()
-	ErrorRepo.WithAuthErr()
-	ErrorRepo.WithClientErr()
-	ErrorRepo.WithServerErr()
+	ErrorRepo = NewErrorRepoWithDefaultErrors()
 }
 
 type ErrorCode int32
@@ -20,35 +16,82 @@ func (ec ErrorCode) String() string {
 	return fmt.Sprintf("%04d", ec)
 }
 
-func (er errorRepo) WithSuccess() {
-	er.RegisterErr(Success, http.StatusOK, "success")
+type option func(repo errorRepo) error
+
+func WithSuccess() option {
+	return func(repo errorRepo) error {
+		err := repo.RegisterErr(Success, http.StatusOK, "success")
+		return err
+	}
 }
 
-func (er errorRepo) WithClientErr() {
-	er.RegisterErr(EcInvalidParams, http.StatusBadRequest, "invalid parameters")
-	er.RegisterErr(EcNotFound, http.StatusNotFound, "the server cannot find the requested resource")
-	er.RegisterErr(EcRequestTimeout, http.StatusRequestTimeout, "request timeout")
-	er.RegisterErr(EcPayloadTooLarge, http.StatusRequestEntityTooLarge, "payload too large")
-	er.RegisterErr(EcTooManyRequests, http.StatusTooManyRequests, "too may requests")
+func WithClientErr() option {
+	return func(repo errorRepo) error {
+		for _, e := range []struct {
+			code   ErrorCode
+			status int
+			msg    string
+		}{
+			{EcInvalidParams, http.StatusBadRequest, "invalid parameters"},
+			{EcNotFound, http.StatusNotFound, "the server cannot find the requested resource"},
+			{EcRequestTimeout, http.StatusRequestTimeout, "request timeout"},
+			{EcPayloadTooLarge, http.StatusRequestEntityTooLarge, "payload too large"},
+			{EcTooManyRequests, http.StatusTooManyRequests, "too may requests"},
+		} {
+			err := repo.RegisterErr(e.code, e.status, e.msg)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
-func (er errorRepo) WithAuthErr() {
-	er.RegisterErr(EcUnauthorizedAuthNotExist, http.StatusUnauthorized, "account/key not found")
-	er.RegisterErr(EcJWTInvalidSignature, http.StatusUnauthorized, "jwt signature is invalid")
-	er.RegisterErr(EcJWTMalformed, http.StatusUnauthorized, "malformed jwt signature")
-	er.RegisterErr(EcJWTSignatureExpired, http.StatusUnauthorized, "jwt signature is expired")
-	er.RegisterErr(EcJWTErrAudience, http.StatusUnauthorized, "error audience (AUD)")
-	er.RegisterErr(EcJWTErrIssueAt, http.StatusUnauthorized, "error issue at (IAT)")
-	er.RegisterErr(EcJWTErrIssuer, http.StatusUnauthorized, "error issuer (ISS)")
-	er.RegisterErr(EcJWTErrNotValidYet, http.StatusUnauthorized, "not yet valid (NBF)")
-	er.RegisterErr(EcJWTErrId, http.StatusUnauthorized, "error jwt key id")
-	er.RegisterErr(EcJWTErrAlg, http.StatusUnauthorized, "jwt algorithm not match")
-	er.RegisterErr(EcJWTInvalidClaims, http.StatusUnauthorized, "invalid jwt claims")
+func WithAuthErr() option {
+	return func(repo errorRepo) error {
+		for _, e := range []struct {
+			code   ErrorCode
+			status int
+			msg    string
+		}{
+			{EcUnauthorizedAuthNotExist, http.StatusUnauthorized, "account/key not found"},
+			{EcJWTInvalidSignature, http.StatusUnauthorized, "jwt signature is invalid"},
+			{EcJWTMalformed, http.StatusUnauthorized, "malformed jwt signature"},
+			{EcJWTSignatureExpired, http.StatusUnauthorized, "jwt signature is expired"},
+			{EcJWTErrAudience, http.StatusUnauthorized, "error audience (AUD)"},
+			{EcJWTErrIssueAt, http.StatusUnauthorized, "error issue at (IAT)"},
+			{EcJWTErrIssuer, http.StatusUnauthorized, "error issuer (ISS)"},
+			{EcJWTErrNotValidYet, http.StatusUnauthorized, "not yet valid (NBF)"},
+			{EcJWTErrId, http.StatusUnauthorized, "error jwt key id"},
+			{EcJWTErrAlg, http.StatusUnauthorized, "jwt algorithm not match"},
+			{EcJWTInvalidClaims, http.StatusUnauthorized, "invalid jwt claims"},
+		} {
+			err := repo.RegisterErr(e.code, e.status, e.msg)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
-func (er errorRepo) WithServerErr() {
-	er.RegisterErr(EcInternalSevereError, http.StatusInternalServerError, "internal server error")
-	er.RegisterErr(EcNotImplemented, http.StatusNotImplemented, "method not implemented")
+func WithServerErr() option {
+	return func(repo errorRepo) error {
+		for _, e := range []struct {
+			code   ErrorCode
+			status int
+			msg    string
+		}{
+			{EcInternalSevereError, http.StatusInternalServerError, "internal server error"},
+			{EcNotImplemented, http.StatusNotImplemented, "method not implemented"},
+		} {
+			err := repo.RegisterErr(e.code, e.status, e.msg)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 // constants

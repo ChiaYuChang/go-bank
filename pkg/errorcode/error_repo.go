@@ -2,6 +2,27 @@ package errorcode
 
 type errorRepo map[ErrorCode]*Error
 
+func NewErrorRepo(opts ...option) (errorRepo, error) {
+	repo := make(errorRepo)
+	for _, opt := range opts {
+		err := opt(repo)
+		if err != nil {
+			return repo, err
+		}
+	}
+	return repo, nil
+}
+
+func NewErrorRepoWithDefaultErrors() errorRepo {
+	repo, _ := NewErrorRepo(
+		WithSuccess(),
+		WithAuthErr(),
+		WithClientErr(),
+		WithServerErr(),
+	)
+	return repo
+}
+
 func (er errorRepo) RegisterErr(code ErrorCode, httpStatusCode int, message string) error {
 	_, ok := er.GetErr(code)
 	if ok {

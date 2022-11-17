@@ -4,10 +4,14 @@ import (
 	"database/sql"
 )
 
+type DBSource interface {
+	ConnStr() string
+	Driver() string
+	String() string
+	Open() (*sql.DB, error)
+	Marshal() ([]byte, error)
+}
+
 func NewEngine(dbSource DBSource) (*sql.DB, error) {
-	engine, err := sql.Open(dbSource.Driver(), dbSource.ConnStr())
-	if err != nil {
-		return nil, err
-	}
-	return engine, nil
+	return dbSource.Open()
 }
